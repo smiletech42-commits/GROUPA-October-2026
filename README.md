@@ -1,3 +1,1 @@
 # GROUP A
-
-### glora
