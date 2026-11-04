@@ -1,88 +1,223 @@
 # GROUP A
-Adisa Taiwo
---- create database internship;
+Adisa Taiwo Question E
+create database internship;
 use internship;
 select * from devices;
 select * from employees;
 select * from ip_reputation;
 select * from login_logs;
-UPDATE login_logs
-SET login_hour = HOUR(login_timestamp);
-ALTER TABLE login_logs
-ADD COLUMN login_hour INT;
 select * from security_alerts;
 
- --- How many login events are recorded in the database?
-select count(*) as total_login_events from login_logs;
+-- A 
+-- to rank the employees account by the number of failed login attempts
+select
+e.employee_id,
+e.employee_name,
+e.department,
+e.employment_status,
+SUM(
+   case
+    when l.login_status = 'Failed' then 1
+	else 0
+end)
+as failed_attempts,
 
---- What period does the dataset cover?
-SELECT
-    MIN(login_timestamp) AS first_login,
-    MAX(login_timestamp) AS last_login
-FROM login_logs;
-
---- What proportion of login attempts succeeded, and what proportion failed?
-SELECT
-    login_status,
-    COUNT(*) AS total_attempts,
-    ROUND(
-        COUNT(*) * 100.0 / (SELECT COUNT(*) FROM login_logs),
-        2
-    ) AS percentage
-FROM login_logs
-GROUP BY login_status;
-
---- Which days of the week experience the highest number of failed login attempts?
-SELECT
-    DAYNAME(login_timestamp) AS day_of_week,
-    COUNT(*) AS failed_attempts
-FROM login_logs
-WHERE login_status = 'Failed'
-GROUP BY DAYNAME(login_timestamp)
-ORDER BY failed_attempts DESC;
-
---- Which hours of the day have the highest volume of failed logins?
-
-SELECT
-    login_hour,
-    COUNT(*) AS failed_attempts
-FROM login_logs
-WHERE login_status = 'Failed'
-GROUP BY login_hour
-ORDER BY failed_attempts DESC;
-
---- Which employee accounts have the highest number of failed login attempts?
-
-SELECT
-    e.employee_name,
-    l.employee_id,
-    COUNT(*) AS failed_attempts
-FROM login_logs AS l
-JOIN employees AS e
-    ON l.employee_id = e.employee_id
-WHERE l.login_status = 'Failed'
-GROUP BY e.employee_name, l.employee_id
-ORDER BY failed_attempts DESC;
-
---- Can you identify accounts with repeated failed logins followed by a successful login? 
-
-  WITH login_sequence AS (
-    SELECT
-        employee_id,
-        login_timestamp,
-        login_status,
-        LAG(login_status) OVER (
-            PARTITION BY employee_id
-            ORDER BY login_timestamp
-        ) AS previous_status,
-        LAG(login_status, 2) OVER (
-            PARTITION BY employee_id
-            ORDER BY login_timestamp
-        ) AS status_two_events_before
-    FROM login_logs
+dense_rank() over(
+    order by SUM(
+        case
+        when l.login_status = 'Failed' then 1
+        else 0
+     end
+     ) desc
+     ) as failure_rank
+     from employees as e
+     left join login_logs as l
+     on e.employee_id = l.employee_id
+     group by 
+     e.employee_id,
+     e.employee_name,
+     e.department,
+     e.employment_status
+     order by 
+     failed_attempts desc;
+     
+     
+     -- B 
+     -- Compare each department's failed-login rate with the overall company rate
+    with department_stats as (
+     select 
+		e.department,
+		count(l.login_id) as total_attempts,
+         
+		sum(
+	      case
+			when l.login_status = 'Failed' then 1
+			else 0
+			end
+			) as failed_attempts
+     
+            from employees as e
+            inner join login_logs as l
+            on e.employee_id = l.employee_id
+            group by e.department
+            ),
+            
+            company_stats as (
+            select
+            count(*) as total_attempts,
+            
+            sum( 
+			case
+			   when login_status = ' Failed' then 1
+               else 0
+              end
+               ) as failed_attempts
+              from login_logs
+               )
+               
+               select 
+               d.department,
+               d.total_attempts,
+               d.failed_attempts,
+               
+               round( 
+                    100.0 * d.failed_attempts /
+                    NULLIF(d.total_attempts, 0),
+                    2
+                    ) as department_failure_rate_pct,
+                    
+                    round( 
+                         100.0 * c.failed_attempts /
+                         NULLIF(c.total_attempts, 0),
+                         2
+                        ) as company_failure_rate_pct,
+                         
+                   round( 
+                         100.0 * d.failed_attempts /
+                         NULLIF(d.total_attempts, 0)
+                         -
+                         100.0 * c.failed_attempts /
+                         NULLIF(c.total_attempts, 0),
+                         2
+                         ) as difference_percentage_points
+					
+                    from department_stats as d
+				cross join company_stats as c
+                order by difference_percentage_points desc;
+        
+        
+	-- C 
+  -- Compare daily or weekly daily login activity with preceding period
+with daily_activity as (
+    select
+        date(login_timestamp) as activity_date,
+        COUNT(*) as total_attempts,
+        sum(
+            case
+                when login_status = 'Failed' then 1
+                else 0
+            end
+        ) as failed_attempts
+    from login_logs
+    group by date(login_timestamp)
+),
+activity_comparison as (
+    select
+        activity_date,
+        total_attempts,
+        failed_attempts,
+        lag(failed_attempts) over (
+            order by activity_date
+        ) as previous_day_failures,
+        lag(total_attempts) over (
+            order by activity_date
+        ) as previous_day_attempts
+   from daily_activity
 )
-SELECT *
-FROM login_sequence
-WHERE login_status = 'Success'
-  AND previous_status = 'Failed'
-  AND status_two_events_before = 'Failed';
+select
+    activity_date,
+    total_attempts,
+    failed_attempts,
+    previous_day_failures,
+    failed_attempts - previous_day_failures
+        as change_in_failed_attempts,
+    round(
+        100.0 * (failed_attempts - previous_day_failures)
+        / NULLIF(previous_day_failures, 0),
+        2
+    ) as percentage_change
+from activity_comparison
+order by activity_date;
+
+
+-- D 
+-- create a reusable summary of security activity that management could query regularly
+   create or replace view daily_security_summary as 
+     select 
+     date(login_timestamp) as activity_date,
+     count(*) as total_login_attempts,
+     sum( 
+       case
+         when login_status = 'Failed' then 1 
+          else 0
+         end
+       ) as failed_login_attempts,
+       
+       sum( 
+         case 
+          when login_status = 'Success' then 1
+          else 0
+          end
+          ) as successfull_login_attempts
+          from login_logs
+          group by date(login_timestamp);
+          
+          -- after view has been created we can use 
+          select * from daily_security_summary
+          order by activity_date;
+          
+          -- to identify the days with the highest failed login count
+          select 
+            activity_date,
+            failed_login_attempts
+            from daily_security_summary
+            order by failed_login_attempts desc
+            limit 10;
+            
+            
+            -- E 
+            -- to know the areas the company should investigate most
+            select
+            a.alert_id,
+            a.employee_id,
+            e.employee_name,
+            e.department,
+            e.employment_status,
+            
+            a.ip_address,
+            ip.risk_level,
+            
+            a.alert_type,
+            a.severity,
+            a.alert_status,
+            a.alert_timestamp
+            
+            from security_alerts as a
+            left join employees as e
+            on a.employee_id = e.employee_id
+            
+            left join ip_reputation as ip
+            on a.ip_address = ip.ip_address
+            where a.alert_status in ('Open', 'Investigating')
+            and (
+               a.severity in ('High', 'Critical')
+               or ip.risk_level = 'High Risk'
+               or e.employment_status = 'Inactive'
+               )
+               order by
+               case
+                 when a.severity = 'Critical' then 1
+                 when a.severity = 'High' then 2
+                 else 3
+                 end,
+                 a.alert_timestamp desc;
